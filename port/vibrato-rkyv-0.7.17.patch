@@ -1,0 +1,219 @@
+diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/Cargo.toml b/vendor/vibrato-rkyv/Cargo.toml
+--- a/vendor/vibrato-rkyv/Cargo.toml	2006-07-24 10:21:28.000000000 +0900
++++ b/vendor/vibrato-rkyv/Cargo.toml	2026-09-10 21:30:40.571516398 +0900
+@@ -119,13 +119,6 @@
+ [dependencies.digest-io]
+ version = "0.1.0"
+
+-[dependencies.dirs]
+-version = "7.0.0"
+-
+-[dependencies.fs4]
+-version = "1.1.0"
+-features = ["sync"]
+-
+ [dependencies.hashbrown]
+ version = "0.17.1"
+
+@@ -135,9 +128,6 @@
+ [dependencies.log]
+ version = "0.4.30"
+
+-[dependencies.memmap2]
+-version = "0.9.11"
+-
+ [dependencies.regex]
+ version = "1.12.3"
+
+@@ -165,9 +155,6 @@
+ version = "0.4.46"
+ optional = true
+
+-[dependencies.tempfile]
+-version = "3.27.0"
+-
+ [dependencies.thiserror]
+ version = "2.0.18"
+
+@@ -179,8 +166,12 @@
+ version = "0.1.7"
+ optional = true
+
+-[dependencies.zstd]
+-version = "0.14.0"
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++dirs = "7.0.0"
++fs4 = { version = "1.1.0", features = ["sync"] }
++memmap2 = "0.9.11"
++tempfile = "3.27.0"
++zstd = "0.14.0"
+
+ [dev-dependencies.criterion]
+ version = "0.8.2"
+diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/dictionary.rs b/vendor/vibrato-rkyv/src/dictionary.rs
+--- a/vendor/vibrato-rkyv/src/dictionary.rs	2006-07-24 10:21:28.000000000 +0900
++++ b/vendor/vibrato-rkyv/src/dictionary.rs	2026-09-10 21:39:07.985814263 +0900
+@@ -3,19 +3,24 @@
+ pub(crate) mod character;
+ pub(crate) mod config;
+ pub(crate) mod connector;
++#[cfg(feature = "download")]
+ pub(crate) mod fetch;
+ pub(crate) mod lexicon;
+ pub(crate) mod mapper;
+ pub(crate) mod unknown;
+ pub(crate) mod word_idx;
+
++#[cfg(not(target_arch = "wasm32"))]
+ use std::fs::{self, File, Metadata, create_dir_all};
+-use std::io::{self, Read, Seek, SeekFrom, Write};
++use std::io::{self, Read, Write};
++#[cfg(not(target_arch = "wasm32"))]
++use std::io::{Seek, SeekFrom};
+ use std::ops::Deref;
+
+ use std::path::PathBuf;
+ use std::sync::{Arc, LazyLock};
+
++#[cfg(not(target_arch = "wasm32"))]
+ use memmap2::Mmap;
+ use rkyv::{
+     Archive, Archived, Deserialize, Serialize, access, access_unchecked,
+@@ -57,12 +62,29 @@
+ const PADDING_LEN: usize = (RKYV_ALIGNMENT - (MODEL_MAGIC_LEN % RKYV_ALIGNMENT)) % RKYV_ALIGNMENT;
+ const DATA_START: usize = MODEL_MAGIC_LEN + PADDING_LEN;
+
++/// Owns complete serialized dictionary bytes in 16-byte-aligned storage.
++pub struct AlignedDictionaryBytes(AlignedVec<16>);
++
++impl AlignedDictionaryBytes {
++    pub fn with_capacity(capacity: usize) -> Self { Self(AlignedVec::with_capacity(capacity)) }
++    pub fn from_slice(bytes: &[u8]) -> Self {
++        let mut out = Self::with_capacity(bytes.len());
++        out.extend_from_slice(bytes);
++        out
++    }
++    pub fn len(&self) -> usize { self.0.len() }
++    pub fn is_empty(&self) -> bool { self.0.is_empty() }
++    pub fn extend_from_slice(&mut self, bytes: &[u8]) { self.0.extend_from_slice(bytes); }
++}
++
+ /// Prefix of magic bytes for legacy bincode-based models.
+ pub const LEGACY_MODEL_MAGIC_PREFIX: &[u8] = b"VibratoTokenizer 0.";
+
++#[cfg(not(target_arch = "wasm32"))]
+ pub static GLOBAL_CACHE_DIR: LazyLock<Option<PathBuf>> =
+     LazyLock::new(|| dirs::cache_dir().map(|p| p.join("vibrato-rkyv")));
+
++#[cfg(not(target_arch = "wasm32"))]
+ pub static GLOBAL_DATA_DIR: LazyLock<Option<PathBuf>> =
+     LazyLock::new(|| dirs::data_local_dir().map(|p| p.join("vibrato-rkyv")));
+
+@@ -123,6 +145,7 @@
+ // Wrapper to own the memory buffer (mmap or heap) and provide access to the archived dictionary.
+ #[allow(dead_code)]
+ enum DictBuffer {
++    #[cfg(not(target_arch = "wasm32"))]
+     Mmap(Mmap),
+     Aligned(AlignedVec<16>),
+     Unowned,
+@@ -556,6 +579,7 @@
+     /// - The file is corrupted, has an invalid format, or has a mismatched magic number.
+     /// - The file was created with an incompatible version of vibrato.
+     /// - (`legacy` feature disabled) A legacy bincode-based dictionary is provided.
++    #[cfg(not(target_arch = "wasm32"))]
+     pub fn from_path<P: AsRef<std::path::Path>>(path: P, mode: LoadMode) -> Result<Self> {
+         let path = path.as_ref();
+         let mut file = File::open(path).map_err(|e| {
+@@ -698,6 +722,7 @@
+     /// The magic number check at the start of the file helps prevent loading a
+     /// completely different file type but does not guarantee the integrity of the
+     /// subsequent data.
++    #[cfg(not(target_arch = "wasm32"))]
+     pub unsafe fn from_path_unchecked<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+         let path = path.as_ref();
+         let mut file = File::open(path).map_err(|e| {
+@@ -754,6 +779,28 @@
+         }))
+     }
+
++    /// Takes ownership of a complete serialized dictionary already held in aligned storage.
++    pub fn from_aligned_bytes(bytes: AlignedDictionaryBytes) -> Result<Self> {
++        if bytes.0.len() < DATA_START {
++            return Err(VibratoError::invalid_argument("bytes", "Data too short."));
++        }
++        let magic = &bytes.0[..MODEL_MAGIC_LEN];
++        if magic.starts_with(LEGACY_MODEL_MAGIC_PREFIX) {
++            return Err(VibratoError::invalid_argument("bytes", "Legacy dictionary is unsupported."));
++        } else if !magic.starts_with(MODEL_MAGIC) {
++            return Err(VibratoError::invalid_argument("bytes", "The magic number of the input model mismatches."));
++        }
++        let data_bytes = &bytes.0[DATA_START..];
++        let archived = access::<ArchivedDictionaryInner, Error>(data_bytes).map_err(|e| {
++            VibratoError::invalid_state(
++                "rkyv validation failed. The dictionary file may be corrupted or incompatible.".to_string(),
++                e.to_string(),
++            )
++        })?;
++        let data: &'static ArchivedDictionaryInner = unsafe { &*(archived as *const _) };
++        Ok(Self::Archived(ArchivedDictionary { _buffer: DictBuffer::Aligned(bytes.0), data }))
++    }
++
+     /// Creates a dictionary from a byte slice by loading all data into a heap buffer.
+     ///
+     /// This function copies the data into an aligned buffer for `rkyv` deserialization.
+@@ -941,6 +988,7 @@
+     /// Returns an error if the specified `cache_dir` (determined by the `strategy`)
+     /// cannot be created or written to, in addition to the errors from
+     /// [`from_zstd_with_options`].
++    #[cfg(not(target_arch = "wasm32"))]
+     pub fn from_zstd<P: AsRef<std::path::Path>>(path: P, strategy: CacheStrategy) -> Result<Self> {
+         let path = path.as_ref();
+
+@@ -1040,6 +1088,7 @@
+     /// # }
+     /// ```
+     #[inline(always)]
++    #[cfg(not(target_arch = "wasm32"))]
+     pub fn from_zstd_with_options<P, Q>(
+         path: P,
+         cache_dir: Q,
+@@ -1319,6 +1368,7 @@
+     /// Returns an error if the input file cannot be read, is not a valid Zstandard
+     /// archive, the decompressed data is not a valid dictionary, or the output
+     /// path cannot be written to.
++    #[cfg(not(target_arch = "wasm32"))]
+     pub fn decompress_zstd<P, Q>(input_path: P, output_path: Q) -> Result<()>
+     where
+         P: AsRef<std::path::Path>,
+@@ -1383,6 +1433,7 @@
+     }
+ }
+
++#[cfg(not(target_arch = "wasm32"))]
+ #[inline(always)]
+ pub(crate) fn compute_metadata_hash(meta: &Metadata) -> String {
+     let mut hasher = Sha256::new();
+diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/errors.rs b/vendor/vibrato-rkyv/src/errors.rs
+--- a/vendor/vibrato-rkyv/src/errors.rs	2006-07-24 10:21:28.000000000 +0900
++++ b/vendor/vibrato-rkyv/src/errors.rs	2026-09-10 21:28:47.504034774 +0900
+@@ -78,6 +78,7 @@
+     RkyvError(#[from] rkyv::rancor::Error),
+
+     /// The error variant for [`tempfile::PathPersistError`](tempfile::PathPersistError).
++    #[cfg(not(target_arch = "wasm32"))]
+     #[error(transparent)]
+     PathPersist(#[from] tempfile::PersistError),
+ }
+diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/lib.rs b/vendor/vibrato-rkyv/src/lib.rs
+--- a/vendor/vibrato-rkyv/src/lib.rs	2006-07-24 10:21:28.000000000 +0900
++++ b/vendor/vibrato-rkyv/src/lib.rs	2026-09-10 21:39:58.021970191 +0900
+@@ -74,7 +74,7 @@
+ #[cfg(test)]
+ mod tests;
+
+-pub use dictionary::{CacheStrategy, Dictionary, LoadMode, SystemDictionaryBuilder};
++pub use dictionary::{AlignedDictionaryBytes, CacheStrategy, Dictionary, LoadMode, SystemDictionaryBuilder};
+ pub use tokenizer::Tokenizer;
+
+ /// Version number of this library.

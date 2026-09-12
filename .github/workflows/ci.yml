@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.98.1"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.14.1"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+      - name: Verify committed runtime
+        run: node scripts/verify-runtime.mjs
+      - name: Prepare pinned upstream
+        run: ./scripts/prepare-upstream.sh
+      - name: Install matching wasm-bindgen CLI
+        run: |
+          version="$(awk '/name = "wasm-bindgen"/ { getline; gsub(/"/, "", $3); print $3; exit }' .work/haqumei/Cargo.lock)"
+          test -n "$version"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Rebuild pinned port
+        run: ./scripts/build-web.sh

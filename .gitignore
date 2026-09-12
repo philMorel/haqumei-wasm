@@ -1,0 +1,4 @@
+.work/
+pkg/
+target/
+.DS_Store

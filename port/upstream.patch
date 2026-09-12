@@ -1,0 +1,803 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index d26fd0d..5791e0f 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -973,6 +973,16 @@ dependencies = [
+  "pyo3",
+ ]
+
++[[package]]
++name = "haqumei-wasm"
++version = "0.12.0-wasm.1"
++dependencies = [
++ "haqumei",
++ "serde",
++ "serde-wasm-bindgen",
++ "wasm-bindgen",
++]
++
+ [[package]]
+ name = "hashbrown"
+ version = "0.15.5"
+@@ -2348,6 +2358,17 @@ dependencies = [
+  "serde_derive",
+ ]
+
++[[package]]
++name = "serde-wasm-bindgen"
++version = "0.6.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
++dependencies = [
++ "js-sys",
++ "serde",
++ "wasm-bindgen",
++]
++
+ [[package]]
+ name = "serde_core"
+ version = "1.0.229"
+@@ -2829,8 +2850,6 @@ dependencies = [
+ [[package]]
+ name = "vibrato-rkyv"
+ version = "0.7.17"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7d806f5ecc1d6687571a7d2ef252d2e70a8e0c27b881fb592267231297e4503c"
+ dependencies = [
+  "bumpalo",
+  "crawdad-rkyv",
+diff --git a/Cargo.toml b/Cargo.toml
+index 2e12f58..f221393 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -16,6 +16,7 @@ members = [
+     "haqumei-kanalizer",
+     "haqumei-macros",
+     "haqumei-python",
++    "haqumei-wasm",
+ ]
+ # 辞書改善用の作業クレート。
+ exclude = ["haqumei-dict-lab"]
+@@ -85,3 +86,6 @@ opt-level = 3
+
+ [profile.dev.package.vibrato-rkyv]
+ opt-level = 3
++
++[patch.crates-io]
++vibrato-rkyv = { path = "vendor/vibrato-rkyv" }
+diff --git a/haqumei-jpreprocess-dictionary/Cargo.toml b/haqumei-jpreprocess-dictionary/Cargo.toml
+index c1e4cff..8773a18 100644
+--- a/haqumei-jpreprocess-dictionary/Cargo.toml
++++ b/haqumei-jpreprocess-dictionary/Cargo.toml
+@@ -25,7 +25,6 @@ required-features = ["binary"]
+
+ [dependencies]
+ vibrato.workspace = true
+-tempfile.workspace = true
+ csv.workspace = true
+ encoding_rs.workspace = true
+
+@@ -34,6 +33,9 @@ haqumei-jpreprocess-core.workspace = true
+
+ clap = { workspace = true, features = ["derive"], optional = true }
+
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++tempfile.workspace = true
++
+ [package.metadata.upstream]
+ repository = "https://github.com/jpreprocess/jpreprocess"
+ revision = "54cf9bc2d40a5d6f25144333e9cd03fd3258a126"
+diff --git a/haqumei-jpreprocess-dictionary/src/lib.rs b/haqumei-jpreprocess-dictionary/src/lib.rs
+index b32db10..a503972 100644
+--- a/haqumei-jpreprocess-dictionary/src/lib.rs
++++ b/haqumei-jpreprocess-dictionary/src/lib.rs
+@@ -1,4 +1,6 @@
+-//! Haqumei と共通の辞書コンパイラーと形態素解析器です。
++//! Haqumei と共通の辞書コンパイラーと形態素解析器です.
++
++pub use vibrato::AlignedDictionaryBytes;
+
+ pub mod mecab;
+ pub mod mecab_compile;
+diff --git a/haqumei-jpreprocess-dictionary/src/mecab.rs b/haqumei-jpreprocess-dictionary/src/mecab.rs
+index fdb5aa3..cfaa431 100644
+--- a/haqumei-jpreprocess-dictionary/src/mecab.rs
++++ b/haqumei-jpreprocess-dictionary/src/mecab.rs
+@@ -1,5 +1,7 @@
+ //! MeCab の辞書形式を読み、全候補と最良経路を解析します。
+
++use crate::AlignedDictionaryBytes;
++
+ use std::{
+     fs, io,
+     ops::Range,
+@@ -196,8 +198,7 @@ impl CharInfo {
+     }
+ }
+
+-fn read_characters(path: &Path) -> io::Result<(Vec<String>, Vec<CharInfo>)> {
+-    let bytes = fs::read(path)?;
++fn parse_characters(bytes: &[u8]) -> io::Result<(Vec<String>, Vec<CharInfo>)> {
+     let count = u32_at(&bytes, 0).ok_or_else(|| invalid("文字種のヘッダーがありません"))? as usize;
+     let names_end = 4usize
+         .checked_add(
+@@ -233,8 +234,12 @@ fn read_characters(path: &Path) -> io::Result<(Vec<String>, Vec<CharInfo>)> {
+     Ok((names, chars))
+ }
+
+-fn read_matrix(path: &Path) -> io::Result<(usize, usize, Vec<i16>)> {
++fn read_characters(path: &Path) -> io::Result<(Vec<String>, Vec<CharInfo>)> {
+     let bytes = fs::read(path)?;
++    parse_characters(&bytes)
++}
++
++fn parse_matrix(bytes: &[u8]) -> io::Result<(usize, usize, Vec<i16>)> {
+     let left_size =
+         u16_at(&bytes, 0).ok_or_else(|| invalid("接続行列のヘッダーがありません"))? as usize;
+     let right_size =
+@@ -255,6 +260,11 @@ fn read_matrix(path: &Path) -> io::Result<(usize, usize, Vec<i16>)> {
+     Ok((left_size, right_size, matrix))
+ }
+
++fn read_matrix(path: &Path) -> io::Result<(usize, usize, Vec<i16>)> {
++    let bytes = fs::read(path)?;
++    parse_matrix(&bytes)
++}
++
+ /// 解析された候補形態素。特徴量には表層形を含みません。
+ #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+ pub struct Node {
+@@ -294,6 +304,7 @@ pub struct Analysis {
+ #[derive(Debug)]
+ struct Data {
+     system_path: PathBuf,
++    system_bytes: Option<Vec<u8>>,
+     user_dictionaries: Vec<Lexicon>,
+     #[cfg(test)]
+     reference_dictionaries: Vec<Lexicon>,
+@@ -345,6 +356,7 @@ impl Model {
+         }
+         Ok(Self(Arc::new(Data {
+             system_path,
++            system_bytes: None,
+             user_dictionaries: users,
+             #[cfg(test)]
+             reference_dictionaries: Vec::new(),
+@@ -360,6 +372,37 @@ impl Model {
+         })))
+     }
+
++    /// Creates a runtime model from the three compiled dictionary blobs.
++    pub fn from_binary_blobs(system: &[u8], chars_bytes: &[u8], matrix_bytes: &[u8]) -> io::Result<Self> {
++        Self::from_aligned_binary_blobs(AlignedDictionaryBytes::from_slice(system), chars_bytes, matrix_bytes)
++    }
++
++    /// Same model, but takes ownership of the already-aligned system dictionary.
++    pub fn from_aligned_binary_blobs(system: AlignedDictionaryBytes, chars_bytes: &[u8], matrix_bytes: &[u8]) -> io::Result<Self> {
++        let (_, chars) = parse_characters(chars_bytes)?;
++        let (left_size, right_size, matrix) = parse_matrix(matrix_bytes)?;
++        let dictionary = vibrato::Dictionary::from_aligned_bytes(system).map_err(io::Error::other)?;
++        let tokenizer = Self::tokenizer_from(dictionary)?;
++        let tokenizer_cell = std::sync::OnceLock::new();
++        let _ = tokenizer_cell.set(Ok(tokenizer));
++        Ok(Self(Arc::new(Data {
++            system_path: PathBuf::new(),
++            system_bytes: None,
++            user_dictionaries: Vec::new(),
++            #[cfg(test)]
++            reference_dictionaries: Vec::new(),
++            #[cfg(test)]
++            reference_unknown: None,
++            #[cfg(test)]
++            unknown_values: Vec::new(),
++            tokenizer: tokenizer_cell,
++            chars,
++            matrix,
++            left_size,
++            right_size,
++        })))
++    }
++
+     #[cfg(test)]
+     fn open_with_reference(directory: &Path, user_dictionaries: &[PathBuf]) -> io::Result<Self> {
+         let mut model = Self::open(directory, user_dictionaries)?;
+@@ -731,6 +774,7 @@ mod tests {
+         let unknown_values = vec![unknown.prefixes(b"DEFAULT").last().unwrap().1];
+         Model(Arc::new(Data {
+             system_path: PathBuf::new(),
++            system_bytes: None,
+             tokenizer: std::sync::OnceLock::new(),
+             user_dictionaries: Vec::new(),
+             reference_dictionaries: vec![lexicon(entries, 0)],
+diff --git a/haqumei-jpreprocess-dictionary/src/mecab/backend.rs b/haqumei-jpreprocess-dictionary/src/mecab/backend.rs
+index 4518033..8e5d9be 100644
+--- a/haqumei-jpreprocess-dictionary/src/mecab/backend.rs
++++ b/haqumei-jpreprocess-dictionary/src/mecab/backend.rs
+@@ -92,8 +92,19 @@ impl Lexicon {
+
+ impl Model {
+     fn make_tokenizer(&self) -> io::Result<SharedTokenizer> {
+-        let dict = vibrato::Dictionary::from_path(&self.0.system_path, vibrato::LoadMode::Validate)
+-            .map_err(io::Error::other)?;
++        let dict = if let Some(bytes) = &self.0.system_bytes {
++            vibrato::Dictionary::from_bytes(bytes).map_err(io::Error::other)?
++        } else {
++            #[cfg(not(target_arch = "wasm32"))]
++            {
++                vibrato::Dictionary::from_path(&self.0.system_path, vibrato::LoadMode::Validate)
++                    .map_err(io::Error::other)?
++            }
++            #[cfg(target_arch = "wasm32")]
++            {
++                return Err(io::Error::new(io::ErrorKind::Unsupported, "path dictionary loading is unavailable in browser WASM"));
++            }
++        };
+         let mut tokenizer = Self::tokenizer_from(dict)?.0.as_ref().clone();
+         if !self.0.user_dictionaries.is_empty() {
+             let mut csv = Vec::new();
+@@ -107,7 +118,7 @@ impl Model {
+         Ok(SharedTokenizer(Arc::new(tokenizer)))
+     }
+
+-    fn tokenizer_from(dict: vibrato::Dictionary) -> io::Result<SharedTokenizer> {
++    pub(super) fn tokenizer_from(dict: vibrato::Dictionary) -> io::Result<SharedTokenizer> {
+         Ok(SharedTokenizer(Arc::new(
+             vibrato::Tokenizer::new(dict)
+                 .prefer_dictionary_on_tie(true)
+@@ -129,6 +140,7 @@ impl Model {
+     }
+ }
+
++#[cfg(not(target_arch = "wasm32"))]
+ pub(super) fn write_system_dictionary(directory: &Path, path: &Path) -> io::Result<()> {
+     let system = Lexicon::open(&directory.join("sys.dic"))?;
+     if system.kind != 0 {
+@@ -213,6 +225,11 @@ pub(super) fn write_system_dictionary(directory: &Path, path: &Path) -> io::Resu
+     Ok(())
+ }
+
++#[cfg(target_arch = "wasm32")]
++pub(super) fn write_system_dictionary(_directory: &Path, _path: &Path) -> io::Result<()> {
++    Err(io::Error::new(io::ErrorKind::Unsupported, "dictionary compilation is unavailable in browser WASM"))
++}
++
+ impl Worker {
+     /// 正規化済み文字列の最良経路を返します。全候補は含みません。
+     pub fn analyze(&mut self, text: &str) -> io::Result<Analysis> {
+diff --git a/haqumei/Cargo.toml b/haqumei/Cargo.toml
+index 4e6fb68..6cc2ae6 100644
+--- a/haqumei/Cargo.toml
++++ b/haqumei/Cargo.toml
+@@ -33,42 +33,43 @@ generate-bindings = []
+ [dependencies]
+ arc-swap.workspace = true
+ daachorse.workspace = true
+-dirs.workspace = true
+-fs4.workspace = true
+ haqumei-jlabel.workspace = true
+ haqumei-jpreprocess.workspace = true
+ haqumei-jpreprocess-core.workspace = true
+ haqumei-jpreprocess-njd.workspace = true
+ haqumei-jpreprocess-jpcommon.workspace = true
+ haqumei-jpreprocess-dictionary.workspace = true
+-haqumei-kanalizer.workspace = true
+ haqumei-macros.workspace = true
+ hex.workspace = true
+ log.workspace = true
+-moka.workspace = true
+-ndarray.workspace = true
+-ort.workspace = true
+ phf.workspace = true
+-rayon.workspace = true
+ rustc-hash.workspace = true
+ sha2.workspace = true
+-tar.workspace = true
+-tempfile.workspace = true
+ thiserror.workspace = true
+ unicode-normalization.workspace = true
+ walkdir.workspace = true
+-zstd.workspace = true
+
+ serde = { workspace = true, optional = true }
+
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++dirs.workspace = true
++fs4.workspace = true
++haqumei-kanalizer.workspace = true
++moka.workspace = true
++ndarray.workspace = true
++ort.workspace = true
++rayon.workspace = true
++tar.workspace = true
++tempfile.workspace = true
++zstd.workspace = true
++
+ [build-dependencies]
+ haqumei-jpreprocess-dictionary.workspace = true
++tar.workspace = true
++zstd.workspace = true
+ digest-io.workspace = true
+-dirs.workspace = true
+ hex.workspace = true
+ sha2.workspace = true
+-tar.workspace = true
+-zstd.workspace = true
+
+ reqwest = { workspace = true, optional = true }
+ tempfile = { workspace = true, optional = true }
+diff --git a/haqumei/src/errors.rs b/haqumei/src/errors.rs
+index 580f33e..c2b16c2 100644
+--- a/haqumei/src/errors.rs
++++ b/haqumei/src/errors.rs
+@@ -76,8 +76,12 @@ pub enum HaqumeiError {
+     #[error(transparent)]
+     DirError(#[from] walkdir::Error),
+
++    #[cfg(not(target_arch = "wasm32"))]
+     #[error(transparent)]
+     OrtError(#[from] ort::Error),
++
++    #[error("Unsupported feature in browser WASM: {0}")]
++    UnsupportedWasmFeature(&'static str),
+ }
+
+ impl From<NulError> for HaqumeiError {
+diff --git a/haqumei/src/lib.rs b/haqumei/src/lib.rs
+index 8210398..8653b2d 100644
+--- a/haqumei/src/lib.rs
++++ b/haqumei/src/lib.rs
+@@ -20,10 +20,15 @@ use std::{
+ };
+
+ pub use haqumei_jlabel::Label;
++pub use haqumei_jpreprocess_dictionary::AlignedDictionaryBytes;
++#[cfg(not(target_arch = "wasm32"))]
+ use haqumei_kanalizer::Kanalizer;
++#[cfg(not(target_arch = "wasm32"))]
+ use moka::sync::Cache;
+
+ use std::collections::HashMap;
++#[cfg(not(target_arch = "wasm32"))]
++use crate::postprocess::{modify_english_words, predict_kana_english};
+
+ pub use candidates::{
+     Candidate, CandidateAlternative, CandidateBranch, CandidateOptions, CandidateReading,
+@@ -44,19 +49,23 @@ use crate::{
+     nani_predict::NaniPredictor,
+     open_jtalk::{Dictionary, GLOBAL_MECAB_DICTIONARY, reading_protection::protected_indices},
+     postprocess::{
+-        modify_acc_after_chaining, modify_context_reading, modify_english_words,
++        modify_acc_after_chaining, modify_context_reading,
+         modify_filler_accent, modify_fraction_denominator, modify_old_province_yomi,
+-        modify_placeholder_maru, predict_kana_english, process_odori_features, read_unknown_kanji,
++        modify_placeholder_maru, process_odori_features, read_unknown_kanji,
+         restore_loanword_kana, retreat_acc_nuc, split_prefix_accent_phrase,
+     },
+ };
++#[cfg(not(target_arch = "wasm32"))]
+ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
++#[cfg(not(target_arch = "wasm32"))]
+ static NANI_PREDICTOR_CACHE: LazyLock<Cache<NjdFeature, bool>> = LazyLock::new(|| Cache::new(1000));
+ static NANI_PREDICTOR: LazyLock<Mutex<NaniPredictor>> = LazyLock::new(|| {
+     Mutex::new(NaniPredictor::new().expect("Failed to initialize NaniPredictor models"))
+ });
++#[cfg(not(target_arch = "wasm32"))]
+ static KANALIZER_CACHE: LazyLock<Cache<String, String>> = LazyLock::new(|| Cache::new(1000));
++#[cfg(not(target_arch = "wasm32"))]
+ static KANALIZER: LazyLock<Mutex<Kanalizer>> =
+     LazyLock::new(|| Mutex::new(Kanalizer::new().expect("Failed to initialize Kanalizer models")));
+
+@@ -868,8 +877,15 @@ impl Haqumei {
+             self.predict_nani_reading(&mut njd_features);
+         }
+         if options.predict_kana_english {
+-            predict_kana_english(&mut njd_features);
+-            modify_english_words(text, &mut njd_features);
++            #[cfg(not(target_arch = "wasm32"))]
++            {
++                predict_kana_english(&mut njd_features);
++                modify_english_words(text, &mut njd_features);
++            }
++            #[cfg(target_arch = "wasm32")]
++            {
++                return Err(HaqumeiError::UnsupportedWasmFeature("predict_kana_english"));
++            }
+         }
+
+         // 読みを確定させた後、アクセント関連の補正より前に文脈依存の読みを解決する
+@@ -946,12 +962,16 @@ impl Haqumei {
+             None => return false,
+         };
+
+-        NANI_PREDICTOR_CACHE.get_with(prev_node.clone(), || {
+-            NANI_PREDICTOR
+-                .lock()
+-                .unwrap()
+-                .predict_is_nan(Some(prev_node))
+-        })
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            NANI_PREDICTOR_CACHE.get_with(prev_node.clone(), || {
++                NANI_PREDICTOR.lock().unwrap().predict_is_nan(Some(prev_node))
++            })
++        }
++        #[cfg(target_arch = "wasm32")]
++        {
++            NANI_PREDICTOR.lock().unwrap().predict_is_nan(Some(prev_node))
++        }
+     }
+
+     impl_batch_method_haqumei!(
+diff --git a/haqumei/src/macros.rs b/haqumei/src/macros.rs
+index ed2ab29..e38d285 100644
+--- a/haqumei/src/macros.rs
++++ b/haqumei/src/macros.rs
+@@ -4,45 +4,37 @@ macro_rules! impl_batch_method_haqumei {
+         $batch_method:ident => $inner_method:ident $(($( $arg:ident : $arg_ty:ty),* ))? -> $ret_type:ty
+     ) => {
+         $(#[$meta])*
+-        ///
+-        #[doc = concat!(
+-            "複数のテキストに対して並行して `",
+-            stringify!($inner_method),
+-            "` を実行します。"
+-        )]
+         pub fn $batch_method<S>(&mut self, texts: &[S], $( $($arg : $arg_ty),* )?) -> Result<Vec<$ret_type>, HaqumeiError>
+         where
+             S: AsRef<str> + Sync,
+         {
+-                // インスタンスが辞書を持っている場合はそれを使う。
+-                // グローバル辞書を無条件に使うと、`from_path` や `from_dictionary` で
+-                // 指定した辞書が黙って無視されてしまう。
+-                let dict = match &self.open_jtalk.dict {
+-                    Some(dict) => dict.clone(),
+-                    None => GLOBAL_MECAB_DICTIONARY.load_full(),
+-                };
+-                if !dict.model.is_initialized() {
+-                    return Err(HaqumeiError::GlobalDictionaryNotInitialized);
+-                }
+-                let options = self.options;
+-                let filter = self.morph_filter.clone();
++            let dict = match &self.open_jtalk.dict {
++                Some(dict) => dict.clone(),
++                None => GLOBAL_MECAB_DICTIONARY.load_full(),
++            };
++            if !dict.model.is_initialized() {
++                return Err(HaqumeiError::GlobalDictionaryNotInitialized);
++            }
++            let options = self.options;
++            let filter = self.morph_filter.clone();
+
+-                texts
+-                    .par_iter()
+-                    .map_init(
++            #[cfg(not(target_arch = "wasm32"))]
++            {
++                texts.par_iter().map_init(
+                     || {
+                         let ojt = OpenJTalk::from_shared_dictionary(dict.clone())
+                             .expect("Failed to initialize OpenJTalk worker");
+-                        Haqumei {
+-                            open_jtalk: ojt,
+-                            options,
+-                            // 各ワーカーが同じ手続きを共有する
+-                            morph_filter: filter.clone(),
+-                        }
++                        Haqumei { open_jtalk: ojt, options, morph_filter: filter.clone() }
+                     },
+                     |haqumei, text| haqumei.$inner_method(text.as_ref(), $( $($arg),* )?),
+-                )
+-                .collect()
++                ).collect()
++            }
++            #[cfg(target_arch = "wasm32")]
++            {
++                let ojt = OpenJTalk::from_shared_dictionary(dict.clone())?;
++                let mut haqumei = Haqumei { open_jtalk: ojt, options, morph_filter: filter };
++                texts.iter().map(|text| haqumei.$inner_method(text.as_ref(), $( $($arg),* )?)).collect()
++            }
+         }
+     };
+ }
+@@ -53,19 +45,10 @@ macro_rules! impl_batch_method_openjtalk {
+         $batch_method:ident => $inner_method:ident $(($( $arg:ident : $arg_ty:ty),* ))? -> $ret_type:ty
+     ) => {
+         $(#[$meta])*
+-        ///
+-        #[doc = concat!(
+-            "複数のテキストに対して並行して `",
+-            stringify!($inner_method),
+-            "` を実行します。"
+-        )]
+         pub fn $batch_method<S>(&mut self, texts: &[S], $( $($arg : $arg_ty),* )?) -> Result<Vec<$ret_type>, HaqumeiError>
+         where
+             S: AsRef<str> + Sync,
+         {
+-            // インスタンスが辞書を持っている場合はそれを使う。
+-            // グローバル辞書を無条件に使うと、`from_path` や `from_dictionary` で
+-            // 指定した辞書が黙って無視されてしまう。
+             let dict = match &self.dict {
+                 Some(dict) => dict.clone(),
+                 None => GLOBAL_MECAB_DICTIONARY.load_full(),
+@@ -73,17 +56,19 @@ macro_rules! impl_batch_method_openjtalk {
+             if !dict.model.is_initialized() {
+                 return Err(HaqumeiError::GlobalDictionaryNotInitialized);
+             }
+-
+-            texts
+-            .par_iter()
+-            .map_init(
+-                || {
+-                    OpenJTalk::from_shared_dictionary(dict.clone())
+-                        .expect("Failed to initialize OpenJTalk worker")
+-                },
+-                |ojt, text| ojt.$inner_method(text.as_ref(), $( $($arg),* )?),
+-            )
+-            .collect()
++            #[cfg(not(target_arch = "wasm32"))]
++            {
++                texts.par_iter().map_init(
++                    || OpenJTalk::from_shared_dictionary(dict.clone())
++                        .expect("Failed to initialize OpenJTalk worker"),
++                    |ojt, text| ojt.$inner_method(text.as_ref(), $( $($arg),* )?),
++                ).collect()
++            }
++            #[cfg(target_arch = "wasm32")]
++            {
++                let mut ojt = OpenJTalk::from_shared_dictionary(dict.clone())?;
++                texts.iter().map(|text| ojt.$inner_method(text.as_ref(), $( $($arg),* )?)).collect()
++            }
+         }
+     };
+ }
+diff --git a/haqumei/src/nani_predict.rs b/haqumei/src/nani_predict.rs
+index dd0fefa..963db2f 100644
+--- a/haqumei/src/nani_predict.rs
++++ b/haqumei/src/nani_predict.rs
+@@ -1,89 +1,26 @@
+-use ort::{
+-    session::Session,
+-    value::{Tensor, TensorRef, Value},
+-};
+-
+ use crate::NjdFeature;
++include!("nani_model_data.rs");
+
+-const ENC_MODEL_BYTES: &[u8] = include_bytes!("../yomi_model/nani_enc.onnx");
+-const MODEL_BYTES: &[u8] = include_bytes!("../yomi_model/nani_model.onnx");
+-
+-/// "何" を "なに" と読むか "なん" と読むか推論するモデル。
+-pub struct NaniPredictor {
+-    enc_session: Session,
+-    model_session: Session,
+-}
+-
++pub struct NaniPredictor;
+ impl NaniPredictor {
+-    /// バイナリに埋め込まれた ONNX モデルから、[NaniPredictor] のセッションを作ります。
+-    pub fn new() -> ort::Result<Self> {
+-        let enc_session = Session::builder()?.commit_from_memory(ENC_MODEL_BYTES)?;
+-
+-        let model_session = Session::builder()?.commit_from_memory(MODEL_BYTES)?;
+-
+-        Ok(Self {
+-            enc_session,
+-            model_session,
+-        })
+-    }
+-
+-    /// [NjdFeature] から、"何" を "なん" と読むか判定します。
+-    pub fn predict_is_nan(&mut self, prev_node: Option<&NjdFeature>) -> bool {
+-        match self.run_inference(prev_node) {
+-            Ok(prediction) => prediction == 1,
+-            Err(e) => {
+-                log::error!("Nani prediction inference failed: {}", e);
+-                false
++    pub fn new() -> Result<Self, std::convert::Infallible> { Ok(Self) }
++    pub fn predict_is_nan(&mut self, next_node: Option<&NjdFeature>) -> bool {
++        let Some(njd) = next_node else { return false; };
++        let fields = [njd.pos.as_str(), njd.pos_group1.as_str(), njd.pos_group2.as_str(), njd.pron.as_str(), njd.ctype.as_str(), njd.cform.as_str()];
++        let mut hot = [usize::MAX; 6];
++        for field in 0..6 {
++            if let Some(i) = CATEGORIES[field].iter().position(|&v| v == fields[field]) { hot[field] = OFFSETS[field] + i; }
++        }
++        let mut s0=0.0f32; let mut s1=0.0f32;
++        for &root in &NANI_ROOTS {
++            let mut i=root as usize;
++            loop {
++                let n=NANI_NODES[i];
++                if n.leaf { s0 += n.score0; s1 += n.score1; break; }
++                let x = if hot.contains(&(n.feature as usize)) {1.0f32} else {0.0f32};
++                i = if x <= n.threshold { n.yes as usize } else { n.no as usize };
+             }
+         }
+-    }
+-
+-    fn run_inference(&mut self, prev_node: Option<&NjdFeature>) -> ort::Result<i64> {
+-        let njd = match prev_node {
+-            Some(node) => node,
+-            None => return Ok(0),
+-        };
+-
+-        let features: [String; 6] = [
+-            njd.pos.to_string(),
+-            njd.pos_group1.to_string(),
+-            njd.pos_group2.to_string(),
+-            njd.pron.to_string(),
+-            njd.ctype.to_string(),
+-            njd.cform.to_string(),
+-        ];
+-
+-        let shape = [1, 6];
+-        let tensor = Tensor::from_string_array((shape, features.as_slice()))?;
+-        let input_value: Value = tensor.into();
+-        let enc_inputs = ort::inputs!["input" => input_value];
+-
+-        let enc_outputs = self.enc_session.run(enc_inputs)?;
+-
+-        let (shape, data) = enc_outputs[0].try_extract_tensor::<f32>()?;
+-
+-        let shape_vec: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
+-        let enc_tensor_ref = TensorRef::from_array_view((shape_vec, data))?;
+-
+-        let model_inputs = ort::inputs!["input" => enc_tensor_ref];
+-
+-        let model_outputs = self.model_session.run(model_inputs)?;
+-
+-        // モデルはクラス確率だけを返すので、最大のクラスを選ぶ。
+-        //
+-        // しラベルの生成は ONNX Runtime のバージョンに
+-        // よって解釈が変わりうるため、明示された確率から判定する。
+-        // (pyopenjtalk-plus が ONNX Runtime 1.26 以降で判定が変わる問題を
+-        // 踏んで、ラベル出力と ZipMap を持たない形へ再エクスポートしている)
+-        let (_, probabilities) = model_outputs[0].try_extract_tensor::<f32>()?;
+-
+-        let best = probabilities
+-            .iter()
+-            .enumerate()
+-            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+-            .map(|(index, _)| index as i64)
+-            .unwrap_or(0);
+-
+-        Ok(best)
++        s1 > s0
+     }
+ }
+diff --git a/haqumei/src/open_jtalk.rs b/haqumei/src/open_jtalk.rs
+index e52ac44..6edae6a 100644
+--- a/haqumei/src/open_jtalk.rs
++++ b/haqumei/src/open_jtalk.rs
+@@ -25,6 +25,7 @@ use crate::{PitchAccent, ProsodyFormat};
+ use arc_swap::ArcSwap;
+ use haqumei_jlabel::Label;
+ use mecab::Mecab;
++#[cfg(not(target_arch = "wasm32"))]
+ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
+ use std::path::Path;
+diff --git a/haqumei/src/open_jtalk/dictionary.rs b/haqumei/src/open_jtalk/dictionary.rs
+index 913c954..9a49498 100644
+--- a/haqumei/src/open_jtalk/dictionary.rs
++++ b/haqumei/src/open_jtalk/dictionary.rs
+@@ -7,7 +7,7 @@ use std::{
+
+ use thiserror::Error;
+
+-use crate::{errors::HaqumeiError, open_jtalk::model::MecabModel};
++use crate::{AlignedDictionaryBytes, errors::HaqumeiError, open_jtalk::model::MecabModel};
+
+ #[cfg(feature = "embed-dictionary")]
+ static DICT_EXTRACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+@@ -32,6 +32,17 @@ fn resolve_path(path: &Path) -> Result<PathBuf, HaqumeiError> {
+ }
+
+ impl Dictionary {
++    /// Builds a dictionary directly from compiled in-memory blobs.
++    pub fn from_binary_blobs(system: &[u8], chars: &[u8], matrix: &[u8]) -> Result<Self, HaqumeiError> {
++        let model = MecabModel::from_binary_blobs(system, chars, matrix)?;
++        Ok(Self { model: Arc::new(model), dict_dir: PathBuf::new() })
++    }
++
++    pub fn from_aligned_binary_blobs(system: AlignedDictionaryBytes, chars: &[u8], matrix: &[u8]) -> Result<Self, HaqumeiError> {
++        let model = MecabModel::from_aligned_binary_blobs(system, chars, matrix)?;
++        Ok(Self { model: Arc::new(model), dict_dir: PathBuf::new() })
++    }
++
+     /// システム辞書パス、ユーザー辞書パスから [Dictionary] を生成します。
+     ///
+     /// ユーザー辞書を複数使う場合は [`Dictionary::from_paths`] を使ってください。
+diff --git a/haqumei/src/open_jtalk/model.rs b/haqumei/src/open_jtalk/model.rs
+index c11c62e..7f9cb07 100644
+--- a/haqumei/src/open_jtalk/model.rs
++++ b/haqumei/src/open_jtalk/model.rs
+@@ -1,6 +1,6 @@
+ use std::path::{Path, PathBuf};
+
+-use haqumei_jpreprocess_dictionary::mecab::Model;
++use haqumei_jpreprocess_dictionary::{AlignedDictionaryBytes, mecab::Model};
+
+ use crate::errors::HaqumeiError;
+
+@@ -15,6 +15,18 @@ impl MecabModel {
+         Ok(Self { model: Some(model) })
+     }
+
++    pub(crate) fn from_binary_blobs(system: &[u8], chars: &[u8], matrix: &[u8]) -> Result<Self, HaqumeiError> {
++        let model = Model::from_binary_blobs(system, chars, matrix)
++            .map_err(|_| HaqumeiError::MecabLoadError)?;
++        Ok(Self { model: Some(model) })
++    }
++
++    pub(crate) fn from_aligned_binary_blobs(system: AlignedDictionaryBytes, chars: &[u8], matrix: &[u8]) -> Result<Self, HaqumeiError> {
++        let model = Model::from_aligned_binary_blobs(system, chars, matrix)
++            .map_err(|_| HaqumeiError::MecabLoadError)?;
++        Ok(Self { model: Some(model) })
++    }
++
+     #[allow(unused)]
+     pub(crate) fn new_uninitialized() -> Self {
+         Self { model: None }
+diff --git a/haqumei/src/postprocess.rs b/haqumei/src/postprocess.rs
+index 691679a..32ecaa3 100644
+--- a/haqumei/src/postprocess.rs
++++ b/haqumei/src/postprocess.rs
+@@ -10,11 +10,15 @@ mod utils;
+ use std::borrow::Cow;
+ use std::ops::Range;
+
++#[cfg(not(target_arch = "wasm32"))]
+ use haqumei_kanalizer::{ConvertOptions, MaxLength};
+ use unicode_normalization::{IsNormalized, UnicodeNormalization as _, is_nfc_quick, is_nfkc_quick};
+
++#[cfg(not(target_arch = "wasm32"))]
++use crate::{KANALIZER, KANALIZER_CACHE};
++
+ use crate::{
+-    Haqumei, HaqumeiOptions, IuPronunciation, KANALIZER, KANALIZER_CACHE, NjdFeature, OpenJTalk,
++    Haqumei, HaqumeiOptions, IuPronunciation, NjdFeature, OpenJTalk,
+     Phoneme, ProsodicPhoneme, UnicodeNormalization,
+     data::OLD_PROVINCE_NAMES,
+     errors::HaqumeiError,
+@@ -253,6 +257,7 @@ pub(crate) fn modify_old_province_yomi(njd_features: &mut [NjdFeature]) {
+ /// n字アルファベット: A E I O U Y を含まない文字のとき、処理しない
+ #[rustfmt::skip]
+ #[inline(always)]
++#[cfg(not(target_arch = "wasm32"))]
+ fn should_use_kanalizer(chars: &[char]) -> bool {
+     if chars.len() == 1 {
+         return false;
+@@ -284,6 +289,7 @@ fn should_use_kanalizer(chars: &[char]) -> bool {
+ /// "IT" は辞書に拾われ、pos == "名詞" になる一方で、"it" は "i" と "t" と分かれた
+ /// pos_group1 == "アルファベット" の `NjdFeature` になってしまう。
+ /// そこで、連続するアルファベットを結合し、条件を満たすものを `Kanalizer` に通している。
++#[cfg(not(target_arch = "wasm32"))]
+ pub(crate) fn predict_kana_english(njd_features: &mut Vec<NjdFeature>) {
+     let mut i = 0;
+     while i < njd_features.len() {
+@@ -398,6 +404,7 @@ impl Haqumei {
+     }
+ }
+
++#[cfg(not(target_arch = "wasm32"))]
+ pub(crate) fn modify_english_words(text: &str, njd_features: &mut [NjdFeature]) {
+     if njd_features.len() < 2 {
+         return;
+diff --git a/haqumei/build.rs b/haqumei/build.rs
+index ad0024c..2906e04 100644
+--- a/haqumei/build.rs
++++ b/haqumei/build.rs
+@@ -65,6 +65,13 @@ fn main() -> Result<(), Box<dyn Error>> {
+     }
+     let has_download = env::var_os("CARGO_FEATURE_DOWNLOAD_DICTIONARY").is_some();
+     let has_build = env::var_os("CARGO_FEATURE_BUILD_DICTIONARY").is_some();
++    let external_wasm_dictionary = env::var_os("CARGO_CFG_TARGET_ARCH").as_deref() == Some(std::ffi::OsStr::new("wasm32"))
++        && !has_download
++        && !has_build
++        && env::var_os("CARGO_FEATURE_EMBED_DICTIONARY").is_none();
++    if external_wasm_dictionary {
++        return Ok(());
++    }
+     if has_download == has_build {
+         return Err("Enable exactly one of download-dictionary and build-dictionary".into());
+     }

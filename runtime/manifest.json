@@ -1,0 +1,34 @@
+{
+  "portVersion": "0.12.0-wasm.1",
+  "haqumeiVersion": "0.12.0",
+  "haqumeiCommit": "f31c4342f0d94ffba08ce4b5abeb19b07bac5ac4",
+  "dictionaryDate": "2026-09-09",
+  "wasm": {
+    "filename": "haqumei_wasm_bg.wasm",
+    "sizeBytes": 2064606,
+    "sha256": "3a38f15bcc266c42ff31329086d69624366246df20194fb0e48eb73a553b6643"
+  },
+  "dictionary": {
+    "filename": "haqumei_dictionary_v0.12.0.bin.gz",
+    "gzipSizeBytes": 21417838,
+    "gzipSha256": "a0c396977306c4f823953bc2f82ae3a3011d26824757da00f3b80cdbf38aab03",
+    "rawSizeBytes": 107584518,
+    "parts": [
+      {
+        "name": "system.bin",
+        "sizeBytes": 103529760,
+        "sha256": "7d6e2e7fb084531c51b1183bf2378ad3bd04a88364c597f3f8a98bae54af0bb6"
+      },
+      {
+        "name": "char.bin",
+        "sizeBytes": 262496,
+        "sha256": "1a3ade6a84c0e6b1cfbd04f3803f32aefe37139724359f2a6cc72abf68099b06"
+      },
+      {
+        "name": "matrix.bin",
+        "sizeBytes": 3792262,
+        "sha256": "62fd16b4f64c851d5dc352ef0d5740c5fc83ddc7c203b2b0b1fc5271969a14ce"
+      }
+    ]
+  }
+}
