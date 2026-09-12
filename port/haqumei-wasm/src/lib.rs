@@ -66,6 +66,114 @@ impl JsDictionary {
     pub fn system_surface_features(&self,surface:&str)->Result<JsValue,JsValue>{
         js(&self.inner.system_surface_features(surface).map_err(js_err)?)
     }
+
+    pub fn system_feature_bytes(&self,start:usize,count:usize)->Result<Vec<u8>,JsValue>{
+        const MAX_BATCH:usize=8192;
+        if count>MAX_BATCH{return Err(JsValue::from_str("system feature byte batch exceeds 8192 records"));}
+        let total=self.inner.system_feature_count().map_err(js_err)?;
+        let end=start.saturating_add(count).min(total);
+        let mut out=Vec::new();
+        out.extend_from_slice(&(u32::try_from(end.saturating_sub(start)).map_err(js_err)?).to_le_bytes());
+        for index in start..end {
+            if let Some(feature)=self.inner.system_feature_at(index).map_err(js_err)? {
+                let bytes=feature.as_bytes();
+                out.extend_from_slice(&(u32::try_from(bytes.len()).map_err(js_err)?).to_le_bytes());
+                out.extend_from_slice(bytes);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn system_surface_feature_bytes(&self,surface:&str)->Result<Vec<u8>,JsValue>{
+        let features=self.inner.system_surface_features(surface).map_err(js_err)?;
+        let mut out=Vec::new();
+        out.extend_from_slice(&(u32::try_from(features.len()).map_err(js_err)?).to_le_bytes());
+        for feature in features {
+            let bytes=feature.as_bytes();
+            out.extend_from_slice(&(u32::try_from(bytes.len()).map_err(js_err)?).to_le_bytes());
+            out.extend_from_slice(bytes);
+        }
+        Ok(out)
+    }
+
+    pub fn system_feature_bytes_matching(&self,start:usize,count:usize,pos:&str,pos1:&str)->Result<Vec<u8>,JsValue>{
+        const MAX_SCAN:usize=65536;
+        if count>MAX_SCAN{return Err(JsValue::from_str("system feature filtered scan exceeds 65536 records"));}
+        let total=self.inner.system_feature_count().map_err(js_err)?;
+        let end=start.saturating_add(count).min(total);
+        let mut payload=Vec::new();
+        let mut matched=0u32;
+        for index in start..end {
+            let Some(feature)=self.inner.system_feature_at(index).map_err(js_err)? else { continue; };
+            let mut fields=feature.split(',');
+            let mut field3=None;
+            let mut field4=None;
+            for field_index in 0..=4 {
+                let Some(field)=fields.next() else { break; };
+                if field_index==3 { field3=Some(field); }
+                if field_index==4 { field4=Some(field); }
+            }
+            if !pos.is_empty() && field3!=Some(pos) { continue; }
+            if !pos1.is_empty() && field4!=Some(pos1) { continue; }
+            let bytes=feature.as_bytes();
+            payload.extend_from_slice(&(u32::try_from(bytes.len()).map_err(js_err)?).to_le_bytes());
+            payload.extend_from_slice(bytes);
+            matched=matched.checked_add(1).ok_or_else(||JsValue::from_str("system feature match count overflow"))?;
+        }
+        let mut out=Vec::with_capacity(4+payload.len());
+        out.extend_from_slice(&matched.to_le_bytes());
+        out.extend_from_slice(&payload);
+        Ok(out)
+    }
+
+    pub fn system_surface_reading_bytes_matching(&self,start:usize,count:usize,pos:&str,pos1:&str)->Result<Vec<u8>,JsValue>{
+        const MAX_SCAN:usize=65536;
+        if count>MAX_SCAN{return Err(JsValue::from_str("system surface-reading filtered scan exceeds 65536 records"));}
+        let total=self.inner.system_feature_count().map_err(js_err)?;
+        let end=start.saturating_add(count).min(total);
+        let mut payload=Vec::new();
+        let mut matched=0u32;
+        for index in start..end {
+            let Some(feature)=self.inner.system_feature_at(index).map_err(js_err)? else { continue; };
+            let mut fields=feature.split(',');
+            let mut field3=None;
+            let mut field4=None;
+            let mut surface=None;
+            let mut reading=None;
+            for field_index in 0..=10 {
+                let Some(field)=fields.next() else { break; };
+                match field_index {
+                    3 => field3=Some(field),
+                    4 => field4=Some(field),
+                    9 => surface=Some(field),
+                    10 => reading=Some(field),
+                    _ => {}
+                }
+            }
+            if !pos.is_empty() && field3!=Some(pos) { continue; }
+            if !pos1.is_empty() && field4!=Some(pos1) { continue; }
+            let (Some(surface),Some(reading))=(surface,reading) else { continue; };
+            let surface_bytes=surface.as_bytes();
+            let reading_bytes=reading.as_bytes();
+            payload.extend_from_slice(&(u32::try_from(surface_bytes.len()).map_err(js_err)?).to_le_bytes());
+            payload.extend_from_slice(surface_bytes);
+            payload.extend_from_slice(&(u32::try_from(reading_bytes.len()).map_err(js_err)?).to_le_bytes());
+            payload.extend_from_slice(reading_bytes);
+            matched=matched.checked_add(1).ok_or_else(||JsValue::from_str("system surface-reading match count overflow"))?;
+        }
+        let mut out=Vec::with_capacity(4+payload.len());
+        out.extend_from_slice(&matched.to_le_bytes());
+        out.extend_from_slice(&payload);
+        Ok(out)
+    }
+
+    pub fn system_has_surface(&self,surface:&str)->Result<bool,JsValue>{
+        Ok(!self.inner.system_surface_features(surface).map_err(js_err)?.is_empty())
+    }
+
+    pub fn system_surface_id(&self,surface:&str)->Result<Option<u32>,JsValue>{
+        self.inner.system_surface_id(surface).map_err(js_err)
+    }
 }
 
 #[wasm_bindgen(js_name = DictionaryBlobLoader)]

@@ -8,13 +8,13 @@ This repository contains the browser WASM port, reproducible build overlays, and
 
 - Haqumei: `0.12.0`
 - Upstream commit: `f31c4342f0d94ffba08ce4b5abeb19b07bac5ac4`
-- Port version: `0.12.0-wasm.2`
+- Port version: `0.12.0-wasm.3`
 - Target: `wasm32-unknown-unknown`
 - wasm-bindgen target: `web`
 
 ## Runtime assets
 
-`runtime/v0.12.0-wasm.2/` contains the immutable browser runtime:
+`runtime/v0.12.0-wasm.3/` contains the immutable browser runtime:
 
 - `haqumei_wasm_bg.wasm`
 - `haqumei_wasm.js`
@@ -31,7 +31,7 @@ The browser port target-gates native-only filesystem/mmap, Rayon, ONNX Runtime, 
 
 ## Dictionary inspection
 
-The browser `Dictionary` wrapper exposes read-only inspection of the loaded system lexicon for consumers that need dictionary-derived indexes without copying the full dictionary into JavaScript. Feature records are available through a bounded batch API (maximum 512 records per call), and exact-surface feature lookup is also available.
+The browser `Dictionary` wrapper exposes read-only inspection of the loaded system lexicon for consumers that need dictionary-derived indexes without copying the full dictionary into JavaScript. Feature records are available through bounded read-only APIs. Consumers can request raw feature batches, POS/POS1-filtered feature batches over bounded word-id ranges, exact-surface feature records, or an exact-surface existence check. These APIs avoid requiring consumers to materialize the full system lexicon in JavaScript.
 
 ## Distribution
 

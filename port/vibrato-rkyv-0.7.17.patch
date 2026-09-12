@@ -1,6 +1,6 @@
 diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/Cargo.toml b/vendor/vibrato-rkyv/Cargo.toml
 --- a/vendor/vibrato-rkyv/Cargo.toml	2006-07-24 10:21:28.000000000 +0900
-+++ b/vendor/vibrato-rkyv/Cargo.toml	2026-09-12 21:34:30.939931881 +0900
++++ b/vendor/vibrato-rkyv/Cargo.toml	2026-09-12 23:24:59.696056282 +0900
 @@ -119,13 +119,6 @@
  [dependencies.digest-io]
  version = "0.1.0"
@@ -52,7 +52,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
  version = "0.8.2"
 diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/dictionary/lexicon/feature.rs b/vendor/vibrato-rkyv/src/dictionary/lexicon/feature.rs
 --- a/vendor/vibrato-rkyv/src/dictionary/lexicon/feature.rs	2006-07-24 10:21:28.000000000 +0900
-+++ b/vendor/vibrato-rkyv/src/dictionary/lexicon/feature.rs	2026-09-12 22:26:46.390063154 +0900
++++ b/vendor/vibrato-rkyv/src/dictionary/lexicon/feature.rs	2026-09-12 23:24:59.699725487 +0900
 @@ -23,6 +23,11 @@
      pub fn get(&self, word_id: usize) -> &str {
          &self.features[word_id]
@@ -79,8 +79,8 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
  #[cfg(feature = "legacy")]
 diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/dictionary/lexicon.rs b/vendor/vibrato-rkyv/src/dictionary/lexicon.rs
 --- a/vendor/vibrato-rkyv/src/dictionary/lexicon.rs	2006-07-24 10:21:28.000000000 +0900
-+++ b/vendor/vibrato-rkyv/src/dictionary/lexicon.rs	2026-09-12 22:26:46.397574915 +0900
-@@ -64,6 +64,25 @@
++++ b/vendor/vibrato-rkyv/src/dictionary/lexicon.rs	2026-09-12 23:30:20.949572151 +0900
+@@ -64,6 +64,33 @@
          self.features.get(usize::from_u32(word_idx.word_id))
      }
 
@@ -103,10 +103,18 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
 +            .collect()
 +    }
 +
++    pub fn surface_id(&self, surface: &str) -> Option<u32> {
++        let input: Vec<char> = surface.chars().collect();
++        let end = input.len();
++        self.common_prefix_iterator(&input)
++            .find(|m| m.end_char == end)
++            .map(|m| m.word_idx.word_id)
++    }
++
      /// Checks if left/right-ids are valid with connector.
      pub fn verify<C>(&self, conn: &C) -> bool
      where
-@@ -253,6 +272,25 @@
+@@ -253,6 +280,33 @@
          debug_assert_eq!(word_idx.lex_type, self.lex_type);
          self.features.get(usize::from_u32(word_idx.word_id))
      }
@@ -129,12 +137,20 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
 +            .map(|m| self.word_feature(m.word_idx))
 +            .collect()
 +    }
++
++    pub fn surface_id(&self, surface: &str) -> Option<u32> {
++        let input: Vec<char> = surface.chars().collect();
++        let end = input.len();
++        self.common_prefix_iterator(&input)
++            .find(|m| m.end_char == end)
++            .map(|m| m.word_idx.word_id)
++    }
  }
 
  #[cfg(feature = "legacy")]
 diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/dictionary.rs b/vendor/vibrato-rkyv/src/dictionary.rs
 --- a/vendor/vibrato-rkyv/src/dictionary.rs	2006-07-24 10:21:28.000000000 +0900
-+++ b/vendor/vibrato-rkyv/src/dictionary.rs	2026-09-12 22:26:46.397574915 +0900
++++ b/vendor/vibrato-rkyv/src/dictionary.rs	2026-09-12 23:30:20.949572151 +0900
 @@ -3,19 +3,24 @@
  pub(crate) mod character;
  pub(crate) mod config;
@@ -199,7 +215,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      Mmap(Mmap),
      Aligned(AlignedVec<16>),
      Unowned,
-@@ -199,6 +222,32 @@
+@@ -199,6 +222,40 @@
      }
  }
 
@@ -227,12 +243,20 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
 +            Self::Owned { dict, .. } => dict.system_lexicon().surface_features(surface),
 +        }
 +    }
++
++    /// Returns a stable system word id for an exact dictionary surface.
++    pub fn system_surface_id(&self, surface: &str) -> Option<u32> {
++        match self {
++            Self::Archived(dict) => dict.system_lexicon().surface_id(surface),
++            Self::Owned { dict, .. } => dict.system_lexicon().surface_id(surface),
++        }
++    }
 +}
 +
  impl DictionaryInner {
      /// Gets the reference to the system lexicon.
      #[inline(always)]
-@@ -556,6 +605,7 @@
+@@ -556,6 +613,7 @@
      /// - The file is corrupted, has an invalid format, or has a mismatched magic number.
      /// - The file was created with an incompatible version of vibrato.
      /// - (`legacy` feature disabled) A legacy bincode-based dictionary is provided.
@@ -240,7 +264,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      pub fn from_path<P: AsRef<std::path::Path>>(path: P, mode: LoadMode) -> Result<Self> {
          let path = path.as_ref();
          let mut file = File::open(path).map_err(|e| {
-@@ -698,6 +748,7 @@
+@@ -698,6 +756,7 @@
      /// The magic number check at the start of the file helps prevent loading a
      /// completely different file type but does not guarantee the integrity of the
      /// subsequent data.
@@ -248,7 +272,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      pub unsafe fn from_path_unchecked<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
          let path = path.as_ref();
          let mut file = File::open(path).map_err(|e| {
-@@ -754,6 +805,28 @@
+@@ -754,6 +813,28 @@
          }))
      }
 
@@ -277,7 +301,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      /// Creates a dictionary from a byte slice by loading all data into a heap buffer.
      ///
      /// This function copies the data into an aligned buffer for `rkyv` deserialization.
-@@ -941,6 +1014,7 @@
+@@ -941,6 +1022,7 @@
      /// Returns an error if the specified `cache_dir` (determined by the `strategy`)
      /// cannot be created or written to, in addition to the errors from
      /// [`from_zstd_with_options`].
@@ -285,7 +309,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      pub fn from_zstd<P: AsRef<std::path::Path>>(path: P, strategy: CacheStrategy) -> Result<Self> {
          let path = path.as_ref();
 
-@@ -1040,6 +1114,7 @@
+@@ -1040,6 +1122,7 @@
      /// # }
      /// ```
      #[inline(always)]
@@ -293,7 +317,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      pub fn from_zstd_with_options<P, Q>(
          path: P,
          cache_dir: Q,
-@@ -1319,6 +1394,7 @@
+@@ -1319,6 +1402,7 @@
      /// Returns an error if the input file cannot be read, is not a valid Zstandard
      /// archive, the decompressed data is not a valid dictionary, or the output
      /// path cannot be written to.
@@ -301,7 +325,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      pub fn decompress_zstd<P, Q>(input_path: P, output_path: Q) -> Result<()>
      where
          P: AsRef<std::path::Path>,
-@@ -1383,6 +1459,7 @@
+@@ -1383,6 +1467,7 @@
      }
  }
 
@@ -311,7 +335,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
      let mut hasher = Sha256::new();
 diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/errors.rs b/vendor/vibrato-rkyv/src/errors.rs
 --- a/vendor/vibrato-rkyv/src/errors.rs	2006-07-24 10:21:28.000000000 +0900
-+++ b/vendor/vibrato-rkyv/src/errors.rs	2026-09-12 21:34:30.943531881 +0900
++++ b/vendor/vibrato-rkyv/src/errors.rs	2026-09-12 23:24:59.699725487 +0900
 @@ -78,6 +78,7 @@
      RkyvError(#[from] rkyv::rancor::Error),
 
@@ -322,7 +346,7 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
  }
 diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/lib.rs b/vendor/vibrato-rkyv/src/lib.rs
 --- a/vendor/vibrato-rkyv/src/lib.rs	2006-07-24 10:21:28.000000000 +0900
-+++ b/vendor/vibrato-rkyv/src/lib.rs	2026-09-12 21:34:30.943531881 +0900
++++ b/vendor/vibrato-rkyv/src/lib.rs	2026-09-12 23:24:59.699725487 +0900
 @@ -74,7 +74,7 @@
  #[cfg(test)]
  mod tests;
@@ -334,8 +358,8 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
  /// Version number of this library.
 diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrato-rkyv/src/tokenizer.rs b/vendor/vibrato-rkyv/src/tokenizer.rs
 --- a/vendor/vibrato-rkyv/src/tokenizer.rs	2006-07-24 10:21:28.000000000 +0900
-+++ b/vendor/vibrato-rkyv/src/tokenizer.rs	2026-09-12 22:26:46.401330797 +0900
-@@ -166,6 +166,21 @@
++++ b/vendor/vibrato-rkyv/src/tokenizer.rs	2026-09-12 23:30:20.949572151 +0900
+@@ -166,6 +166,26 @@
          }
      }
 
@@ -352,6 +376,11 @@ diff -ruN '--exclude=.cargo-ok' '--exclude=.cargo_vcs_info.json' a/vendor/vibrat
 +    /// Returns raw feature records whose dictionary surface exactly matches `surface`.
 +    pub fn system_surface_features(&self, surface: &str) -> Vec<&str> {
 +        self.dict.system_surface_features(surface)
++    }
++
++    /// Returns a stable system word id for an exact dictionary surface.
++    pub fn system_surface_id(&self, surface: &str) -> Option<u32> {
++        self.dict.system_surface_id(surface)
 +    }
 +
      /// Creates a new worker.
