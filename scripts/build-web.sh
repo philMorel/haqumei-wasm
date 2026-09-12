@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${1:-$ROOT/.work/haqumei}"
 OUT_DIR="${2:-$ROOT/pkg}"
-RUNTIME_DIR="$ROOT/runtime/v0.12.0-wasm.1"
+RUNTIME_DIR="$ROOT/runtime/v0.12.0-wasm.2"
 
 if [ ! -d "$WORK_DIR/.git" ]; then
   "$ROOT/scripts/prepare-upstream.sh" "$WORK_DIR"

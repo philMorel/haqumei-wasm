@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index d26fd0d..5791e0f 100644
+index d26fd0d..d45e1a0 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -973,6 +973,16 @@ dependencies = [
@@ -8,7 +8,7 @@ index d26fd0d..5791e0f 100644
 
 +[[package]]
 +name = "haqumei-wasm"
-+version = "0.12.0-wasm.1"
++version = "0.12.0-wasm.2"
 +dependencies = [
 + "haqumei",
 + "serde",
@@ -210,7 +210,7 @@ index fdb5aa3..cfaa431 100644
              user_dictionaries: Vec::new(),
              reference_dictionaries: vec![lexicon(entries, 0)],
 diff --git a/haqumei-jpreprocess-dictionary/src/mecab/backend.rs b/haqumei-jpreprocess-dictionary/src/mecab/backend.rs
-index 4518033..8e5d9be 100644
+index 4518033..3666292 100644
 --- a/haqumei-jpreprocess-dictionary/src/mecab/backend.rs
 +++ b/haqumei-jpreprocess-dictionary/src/mecab/backend.rs
 @@ -92,8 +92,19 @@ impl Lexicon {
@@ -244,7 +244,42 @@ index 4518033..8e5d9be 100644
          Ok(SharedTokenizer(Arc::new(
              vibrato::Tokenizer::new(dict)
                  .prefer_dictionary_on_tie(true)
-@@ -129,6 +140,7 @@ impl Model {
+@@ -117,18 +128,37 @@ impl Model {
+         )))
+     }
+
+-    /// 読み込んだ辞書を使う vibrato-rkyv ワーカーを作ります。
+-    pub fn worker(&self) -> io::Result<Worker> {
+-        let tokenizer = self
+-            .0
++    fn tokenizer(&self) -> io::Result<&SharedTokenizer> {
++        self.0
+             .tokenizer
+             .get_or_init(|| self.make_tokenizer().map_err(|e| e.to_string()))
+             .as_ref()
+-            .map_err(|e| invalid(e))?;
++            .map_err(|e| invalid(e))
++    }
++
++    /// Returns the number of raw system-lexicon feature records.
++    pub fn system_feature_count(&self) -> io::Result<usize> {
++        Ok(self.tokenizer()?.0.system_feature_count())
++    }
++
++    /// Returns one raw system-lexicon feature record by word id.
++    pub fn system_feature_at(&self, index: usize) -> io::Result<Option<&str>> {
++        Ok(self.tokenizer()?.0.system_feature_at(index))
++    }
++
++    /// Returns raw feature records whose dictionary surface exactly matches `surface`.
++    pub fn system_surface_features(&self, surface: &str) -> io::Result<Vec<&str>> {
++        Ok(self.tokenizer()?.0.system_surface_features(surface))
++    }
++
++    /// 読み込んだ辞書を使う vibrato-rkyv ワーカーを作ります。
++    pub fn worker(&self) -> io::Result<Worker> {
++        let tokenizer = self.tokenizer()?;
+         Ok(Worker(tokenizer.0.new_worker(), self.clone()))
      }
  }
 
@@ -252,7 +287,7 @@ index 4518033..8e5d9be 100644
  pub(super) fn write_system_dictionary(directory: &Path, path: &Path) -> io::Result<()> {
      let system = Lexicon::open(&directory.join("sys.dic"))?;
      if system.kind != 0 {
-@@ -213,6 +225,11 @@ pub(super) fn write_system_dictionary(directory: &Path, path: &Path) -> io::Resu
+@@ -213,6 +243,11 @@ pub(super) fn write_system_dictionary(directory: &Path, path: &Path) -> io::Resu
      Ok(())
  }
 
@@ -325,6 +360,24 @@ index 4e6fb68..6cc2ae6 100644
 
  reqwest = { workspace = true, optional = true }
  tempfile = { workspace = true, optional = true }
+diff --git a/haqumei/build.rs b/haqumei/build.rs
+index ad0024c..2906e04 100644
+--- a/haqumei/build.rs
++++ b/haqumei/build.rs
+@@ -65,6 +65,13 @@ fn main() -> Result<(), Box<dyn Error>> {
+     }
+     let has_download = env::var_os("CARGO_FEATURE_DOWNLOAD_DICTIONARY").is_some();
+     let has_build = env::var_os("CARGO_FEATURE_BUILD_DICTIONARY").is_some();
++    let external_wasm_dictionary = env::var_os("CARGO_CFG_TARGET_ARCH").as_deref() == Some(std::ffi::OsStr::new("wasm32"))
++        && !has_download
++        && !has_build
++        && env::var_os("CARGO_FEATURE_EMBED_DICTIONARY").is_none();
++    if external_wasm_dictionary {
++        return Ok(());
++    }
+     if has_download == has_build {
+         return Err("Enable exactly one of download-dictionary and build-dictionary".into());
+     }
 diff --git a/haqumei/src/errors.rs b/haqumei/src/errors.rs
 index 580f33e..c2b16c2 100644
 --- a/haqumei/src/errors.rs
@@ -677,7 +730,7 @@ index e52ac44..6edae6a 100644
 
  use std::path::Path;
 diff --git a/haqumei/src/open_jtalk/dictionary.rs b/haqumei/src/open_jtalk/dictionary.rs
-index 913c954..9a49498 100644
+index 913c954..c43fc0c 100644
 --- a/haqumei/src/open_jtalk/dictionary.rs
 +++ b/haqumei/src/open_jtalk/dictionary.rs
 @@ -7,7 +7,7 @@ use std::{
@@ -689,7 +742,7 @@ index 913c954..9a49498 100644
 
  #[cfg(feature = "embed-dictionary")]
  static DICT_EXTRACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-@@ -32,6 +32,17 @@ fn resolve_path(path: &Path) -> Result<PathBuf, HaqumeiError> {
+@@ -32,6 +32,32 @@ fn resolve_path(path: &Path) -> Result<PathBuf, HaqumeiError> {
  }
 
  impl Dictionary {
@@ -704,11 +757,26 @@ index 913c954..9a49498 100644
 +        Ok(Self { model: Arc::new(model), dict_dir: PathBuf::new() })
 +    }
 +
++    /// Returns the number of raw system-lexicon feature records.
++    pub fn system_feature_count(&self) -> Result<usize, HaqumeiError> {
++        self.model.system_feature_count()
++    }
++
++    /// Returns one raw system-lexicon feature record by word id.
++    pub fn system_feature_at(&self, index: usize) -> Result<Option<&str>, HaqumeiError> {
++        self.model.system_feature_at(index)
++    }
++
++    /// Returns raw feature records whose dictionary surface exactly matches `surface`.
++    pub fn system_surface_features(&self, surface: &str) -> Result<Vec<&str>, HaqumeiError> {
++        self.model.system_surface_features(surface)
++    }
++
      /// システム辞書パス、ユーザー辞書パスから [Dictionary] を生成します。
      ///
      /// ユーザー辞書を複数使う場合は [`Dictionary::from_paths`] を使ってください。
 diff --git a/haqumei/src/open_jtalk/model.rs b/haqumei/src/open_jtalk/model.rs
-index c11c62e..7f9cb07 100644
+index c11c62e..a559c7e 100644
 --- a/haqumei/src/open_jtalk/model.rs
 +++ b/haqumei/src/open_jtalk/model.rs
 @@ -1,6 +1,6 @@
@@ -738,6 +806,23 @@ index c11c62e..7f9cb07 100644
      #[allow(unused)]
      pub(crate) fn new_uninitialized() -> Self {
          Self { model: None }
+@@ -23,4 +35,16 @@ impl MecabModel {
+     pub(crate) fn is_initialized(&self) -> bool {
+         self.model.is_some()
+     }
++
++    pub(crate) fn system_feature_count(&self) -> Result<usize, HaqumeiError> {
++        self.model.as_ref().ok_or(HaqumeiError::MecabLoadError)?.system_feature_count().map_err(Into::into)
++    }
++
++    pub(crate) fn system_feature_at(&self, index: usize) -> Result<Option<&str>, HaqumeiError> {
++        self.model.as_ref().ok_or(HaqumeiError::MecabLoadError)?.system_feature_at(index).map_err(Into::into)
++    }
++
++    pub(crate) fn system_surface_features(&self, surface: &str) -> Result<Vec<&str>, HaqumeiError> {
++        self.model.as_ref().ok_or(HaqumeiError::MecabLoadError)?.system_surface_features(surface).map_err(Into::into)
++    }
+ }
 diff --git a/haqumei/src/postprocess.rs b/haqumei/src/postprocess.rs
 index 691679a..32ecaa3 100644
 --- a/haqumei/src/postprocess.rs
@@ -783,21 +868,3 @@ index 691679a..32ecaa3 100644
  pub(crate) fn modify_english_words(text: &str, njd_features: &mut [NjdFeature]) {
      if njd_features.len() < 2 {
          return;
-diff --git a/haqumei/build.rs b/haqumei/build.rs
-index ad0024c..2906e04 100644
---- a/haqumei/build.rs
-+++ b/haqumei/build.rs
-@@ -65,6 +65,13 @@ fn main() -> Result<(), Box<dyn Error>> {
-     }
-     let has_download = env::var_os("CARGO_FEATURE_DOWNLOAD_DICTIONARY").is_some();
-     let has_build = env::var_os("CARGO_FEATURE_BUILD_DICTIONARY").is_some();
-+    let external_wasm_dictionary = env::var_os("CARGO_CFG_TARGET_ARCH").as_deref() == Some(std::ffi::OsStr::new("wasm32"))
-+        && !has_download
-+        && !has_build
-+        && env::var_os("CARGO_FEATURE_EMBED_DICTIONARY").is_none();
-+    if external_wasm_dictionary {
-+        return Ok(());
-+    }
-     if has_download == has_build {
-         return Err("Enable exactly one of download-dictionary and build-dictionary".into());
-     }

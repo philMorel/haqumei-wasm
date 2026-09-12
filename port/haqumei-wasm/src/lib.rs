@@ -46,6 +46,26 @@ impl JsDictionary {
     pub fn from_bytes(system:&[u8], chars:&[u8], matrix:&[u8])->Result<JsDictionary,JsValue>{
         Ok(Self{inner:Dictionary::from_binary_blobs(system,chars,matrix).map_err(js_err)?})
     }
+
+    pub fn system_feature_count(&self)->Result<usize,JsValue>{
+        self.inner.system_feature_count().map_err(js_err)
+    }
+
+    pub fn system_features(&self,start:usize,count:usize)->Result<JsValue,JsValue>{
+        const MAX_BATCH:usize=512;
+        if count>MAX_BATCH{return Err(JsValue::from_str("system feature batch exceeds 512 records"));}
+        let total=self.inner.system_feature_count().map_err(js_err)?;
+        let end=start.saturating_add(count).min(total);
+        let mut out=Vec::with_capacity(end.saturating_sub(start));
+        for index in start..end {
+            if let Some(feature)=self.inner.system_feature_at(index).map_err(js_err)? { out.push(feature); }
+        }
+        js(&out)
+    }
+
+    pub fn system_surface_features(&self,surface:&str)->Result<JsValue,JsValue>{
+        js(&self.inner.system_surface_features(surface).map_err(js_err)?)
+    }
 }
 
 #[wasm_bindgen(js_name = DictionaryBlobLoader)]

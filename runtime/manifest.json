@@ -1,12 +1,12 @@
 {
-  "portVersion": "0.12.0-wasm.1",
+  "portVersion": "0.12.0-wasm.2",
   "haqumeiVersion": "0.12.0",
   "haqumeiCommit": "f31c4342f0d94ffba08ce4b5abeb19b07bac5ac4",
   "dictionaryDate": "2026-09-09",
   "wasm": {
     "filename": "haqumei_wasm_bg.wasm",
-    "sizeBytes": 2064606,
-    "sha256": "3a38f15bcc266c42ff31329086d69624366246df20194fb0e48eb73a553b6643"
+    "sizeBytes": 2082182,
+    "sha256": "825124408c0926e9770dc730d6dbf3cb6b80fc55e228e534d4d7768070fe071c"
   },
   "dictionary": {
     "filename": "haqumei_dictionary_v0.12.0.bin.gz",
